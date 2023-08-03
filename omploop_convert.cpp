@@ -16,8 +16,11 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Rewrite/Core/Rewriter.h"
+#include "clang/Analysis/AnalysisDeclContext.h"
+#include "clang/Analysis/Analyses/LiveVariables.h"
 
 #include <stdio.h>
+#include <set>
 
 using namespace std;
 using namespace clang;
@@ -30,6 +33,17 @@ class MyVisitor : public RecursiveASTVisitor<MyVisitor> {
 private:
   ASTContext *astContext; // used for getting additional AST info
   Rewriter *rewriter;
+  void get_used_vars(const Stmt *curr, std::set<std::string> &used)
+  {
+    if (auto ref = dyn_cast<DeclRefExpr>(curr)) {
+      used.insert(ref->getNameInfo().getAsString());
+      //std::cout << "**** " << ref->getNameInfo().getAsString() << "\n";
+    }
+    for (auto child : curr->children()) {
+      get_used_vars(child, used);
+    }
+  }
+  
 public:
   explicit MyVisitor(CompilerInstance *CI, Rewriter *R) 
       : astContext(&(CI->getASTContext())) // initialize private members
@@ -40,40 +54,21 @@ public:
       //st->dump();
       return true;
     }
+
+  
     virtual bool VisitOMPParallelForDirective(OMPParallelForDirective *omp) {
-      /*
-      omp->dump();
-      omp->dumpPretty(*astContext);
-      const Stmt *BodyStmt = omp->getBody();
-      omp->getCond()->dumpPretty(*astContext);
-      omp->getPreCond()->dumpPretty(*astContext);
-      omp->getInit()->dumpPretty(*astContext);
-      omp->getInc()->dumpPretty(*astContext);
-      printf("\n1...\n");
-      omp->getLastIteration()->dumpPretty(*astContext);
-      printf("\n1...\n");
-      omp->getUpperBoundVariable()->dumpPretty(*astContext);
-      printf("\n1...\n");
-      omp->getNextUpperBound()->dumpPretty(*astContext);
-      printf("\n1...\n");
-      omp->getEnsureUpperBound()->dumpPretty(*astContext);
-      printf("\n1...\n");
-      for (const Expr *u: omp->updates()) {
-	u->dumpPretty(*astContext);
+      AnalysisDeclContextManager adcm(*astContext);
+      AnalysisDeclContext *adc = adcm.getContext(omp->getInnermostCapturedStmt()->getCapturedDecl()->getNonClosureContext());
+      adc->getCFGBuildOptions().setAllAlwaysAdd();
+      CFG& cfg = *adc->getCFG();
+      LiveVariables *lv = adc->getAnalysis<LiveVariables>();
+      std::set<std::string> used;
+      get_used_vars(omp->getBody(), used);
+      //cfg.print(llvm::outs(), astContext->getLangOpts(), false);
+      for (auto name: used) {
+	//std::cerr << "used_var : " << name << "\n";
+	printf("used_var : %s\n", name.c_str());
       }
-      printf("\n2...\n");
-      for (const Expr *ini: omp->inits()) {
-	ini->dumpPretty(*astContext);
-      }
-      printf("\n3...\n");
-      for (const Expr *fc: omp->finals_conditions()) {
-	fc->dumpPretty(*astContext);
-      }
-      printf("\n4...\n");
-      for (const Expr *f: omp->finals()) {
-	f->dumpPretty(*astContext);
-      }
-      */
 
       std::string str_init;
       llvm::raw_string_ostream os_init(str_init);
