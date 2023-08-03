@@ -103,16 +103,16 @@ public:
       std::string str_head;
       llvm::raw_string_ostream os_head(str_head);
 
-      os_head << "\n auto "
-	      << str_init
-	      << ";\n"
+      std::string str_body;
+      llvm::raw_string_ostream os_body(str_body);
+      omp->getBody()->printPretty(os_body, nullptr, PrintingPolicy(astContext->getLangOpts()));
+
+      os_head << "\n"
+	"  auto " << str_init << ";\n"
 	"  int my_th_iter = 0;\n"
 	"  int my_th_iter_max = ";
       omp->getLastIteration()->printPretty(os_head, nullptr, PrintingPolicy(astContext->getLangOpts()));
 
-      std::string str_body;
-      llvm::raw_string_ostream os_body(str_body);
-      omp->getBody()->printPretty(os_body, nullptr, PrintingPolicy(astContext->getLangOpts()));
       os_head << ";\n"
 	"  int n_done = 0;\n"
 	"  int stat[N_CORO];\n"
@@ -123,20 +123,15 @@ public:
 	"        case -1: goto __exit;\n"
 	"        case 0:\n"
 	"          while (1) {\n"
-	"            if (!("
-	      << str_cond
-	      <<
-	")) {\n"
+	"            if (!(" << str_cond << ")) {\n"
 	"              stat[i_coro] = -1;\n"
 	"              n_done ++;\n"
 	"              goto __exit;\n"
 	"            } // if\n"
-	      << str_update
-	      << ";\n"
+	"            " << str_update << ";\n"
 	"            my_th_iter++;\n"
 	"            stat[i_coro] = __LINE__; goto __exit; case __LINE__: \n"
-	      << str_body
-	      << "\n"
+	      << str_body <<
 	"          } // while (1)\n"
 	"      } // switch (stat[i_coro])\n"
 	"    __exit:\n"
