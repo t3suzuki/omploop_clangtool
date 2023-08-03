@@ -21,6 +21,7 @@
 
 #include <stdio.h>
 #include <set>
+#include <regex>
 
 using namespace std;
 using namespace clang;
@@ -33,11 +34,15 @@ class MyVisitor : public RecursiveASTVisitor<MyVisitor> {
 private:
   ASTContext *astContext; // used for getting additional AST info
   Rewriter *rewriter;
-  void get_used_vars(const Stmt *curr, std::set<std::string> &used)
+  void get_used_vars(const Stmt *curr, std::set<const VarDecl *> &used)
   {
-    if (auto ref = dyn_cast<DeclRefExpr>(curr)) {
-      used.insert(ref->getNameInfo().getAsString());
-      //std::cout << "**** " << ref->getNameInfo().getAsString() << "\n";
+    if (!curr) {
+      return;
+    }
+    if (auto ds = dyn_cast<DeclStmt>(curr)) {
+      if (const VarDecl *vd = dyn_cast<VarDecl>(ds->getSingleDecl())) {
+	used.insert(vd);
+      }
     }
     for (auto child : curr->children()) {
       get_used_vars(child, used);
@@ -58,18 +63,41 @@ public:
   
     virtual bool VisitOMPParallelForDirective(OMPParallelForDirective *omp) {
       AnalysisDeclContextManager adcm(*astContext);
-      AnalysisDeclContext *adc = adcm.getContext(omp->getInnermostCapturedStmt()->getCapturedDecl()->getNonClosureContext());
+      auto top_decl = omp->getInnermostCapturedStmt()->getCapturedDecl()->getNonClosureContext();
+      AnalysisDeclContext *adc = adcm.getContext(top_decl);
       adc->getCFGBuildOptions().setAllAlwaysAdd();
       CFG& cfg = *adc->getCFG();
       LiveVariables *lv = adc->getAnalysis<LiveVariables>();
-      std::set<std::string> used;
-      get_used_vars(omp->getBody(), used);
+      std::set<const VarDecl *> used;
+      //omp->getInnermostCapturedStmt()->dump();
+      get_used_vars(omp->getInnermostCapturedStmt()->getCapturedDecl()->getBody(), used);
       //cfg.print(llvm::outs(), astContext->getLangOpts(), false);
-      for (auto name: used) {
+      for (auto vd: used) {
 	//std::cerr << "used_var : " << name << "\n";
-	printf("used_var : %s\n", name.c_str());
+	printf("used_var : %s\n", vd->getNameAsString().c_str());
       }
-
+      //lv->dumpBlockLiveness(astContext->getSourceManager());
+#if 0
+      for (auto B: cfg) {
+	if (B->getTerminator().isValid()) {
+	  CFGTerminator T = B->getTerminator();
+	  if (T.getKind() == CFGTerminator::StmtBranch) {
+	    auto Stmt = T.getStmt();
+	    if (const GotoStmt *GTStmt = dyn_cast<GotoStmt>(Stmt)) {
+	      LabelDecl *ldecl = GTStmt->getLabel();
+	      std::regex re("my_yield");
+	      bool is_my_yield = std::regex_search(ldecl->getName().str(),re);
+	      if (is_my_yield) {
+		for (auto vd: used) {
+		  bool islive = lv->isLive(B, vd);
+		  printf("used_var : %s %d\n", vd->getNameAsString().c_str(), islive);
+		}
+	      }
+	    }
+	  }
+	}
+      }
+#endif
       std::string str_init;
       llvm::raw_string_ostream os_init(str_init);
       for (const Expr *ini: omp->inits()) {
