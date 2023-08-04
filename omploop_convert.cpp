@@ -89,6 +89,7 @@ public:
       }
       //lv->dumpBlockLiveness(astContext->getSourceManager());
 #if 1
+      std::string new_array;
       for (auto B: cfg) {
 	if (B->getTerminator().isValid()) {
 	  CFGTerminator T = B->getTerminator();
@@ -101,7 +102,12 @@ public:
 	      if (is_my_yield) {
 		for (auto vd: used) {
 		  bool islive = lv->isLive(B, vd);
-		  printf("live used_var : %s %d\n", vd->getNameAsString().c_str(), islive);
+		  QualType qtype = vd->getTypeSourceInfo()->getType();
+		  printf("live used_var : %s %d %s\n", vd->getNameAsString().c_str(), islive,
+			 qtype.getAsString().c_str());
+		  if (islive) {
+		    new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CORO];\n";
+		  }
 		}
 	      }
 	    }
@@ -150,6 +156,7 @@ public:
       omp->getBody()->printPretty(os_body, nullptr, PrintingPolicy(astContext->getLangOpts()));
 
       os_head << "\n"
+	      << new_array <<
 	"  auto " << str_init << "; // init \n"
 	"  int my_th_iter = 0;\n"
 	"  int my_th_iter_max = ";
