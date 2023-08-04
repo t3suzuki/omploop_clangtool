@@ -20,6 +20,7 @@
 #include "clang/Analysis/Analyses/LiveVariables.h"
 
 #include <stdio.h>
+#include <unistd.h>
 #include <set>
 #include <regex>
 
@@ -38,6 +39,8 @@ private:
   {
     if (!curr) {
       return;
+    } else {
+      printf("+++ %s\n", curr->getStmtClassName());
     }
     if (auto ds = dyn_cast<DeclStmt>(curr)) {
       if (const VarDecl *vd = dyn_cast<VarDecl>(ds->getSingleDecl())) {
@@ -61,7 +64,13 @@ public:
     }
 
   
-    virtual bool VisitOMPParallelForDirective(OMPParallelForDirective *omp) {
+    virtual bool VisitOMPLoopDirective(OMPLoopDirective *omp) {
+      for (const Expr *u: omp->updates()) {
+	if (!u) {
+	  printf("Skipped this directive. I don't know why some OMPLoopDirectives don't work.\n");
+	  return true;
+	}
+      }
       AnalysisDeclContextManager adcm(*astContext);
       auto top_decl = omp->getInnermostCapturedStmt()->getCapturedDecl()->getNonClosureContext();
       AnalysisDeclContext *adc = adcm.getContext(top_decl);
@@ -69,7 +78,7 @@ public:
       CFG& cfg = *adc->getCFG();
       LiveVariables *lv = adc->getAnalysis<LiveVariables>();
       std::set<const VarDecl *> used;
-      //omp->getInnermostCapturedStmt()->dump();
+      omp->getInnermostCapturedStmt()->dump();
       get_used_vars(omp->getInnermostCapturedStmt()->getCapturedDecl()->getBody(), used);
       //cfg.print(llvm::outs(), astContext->getLangOpts(), false);
       for (auto vd: used) {
@@ -90,7 +99,7 @@ public:
 	      if (is_my_yield) {
 		for (auto vd: used) {
 		  bool islive = lv->isLive(B, vd);
-		  printf("used_var : %s %d\n", vd->getNameAsString().c_str(), islive);
+		  printf("live used_var : %s %d\n", vd->getNameAsString().c_str(), islive);
 		}
 	      }
 	    }
@@ -98,9 +107,17 @@ public:
 	}
       }
 #endif
+      omp->dumpPretty(*astContext);
+      //omp->dump();
+      //omp->getLastIteration()->dump();
+      
+      //omp->getIterationVariable()->dump();
+      //omp->getIterationVariable()->dump();
+      
       std::string str_init;
       llvm::raw_string_ostream os_init(str_init);
       for (const Expr *ini: omp->inits()) {
+	//ini->dump();
 	ini->printPretty(os_init, nullptr, PrintingPolicy(astContext->getLangOpts()));
       }
 
@@ -131,7 +148,7 @@ public:
       omp->getBody()->printPretty(os_body, nullptr, PrintingPolicy(astContext->getLangOpts()));
 
       os_head << "\n"
-	"  auto " << str_init << ";\n"
+	"  auto " << str_init << "; // init \n"
 	"  int my_th_iter = 0;\n"
 	"  int my_th_iter_max = ";
       omp->getLastIteration()->printPretty(os_head, nullptr, PrintingPolicy(astContext->getLangOpts()));
