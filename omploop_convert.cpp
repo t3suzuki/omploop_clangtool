@@ -42,9 +42,11 @@ private:
     } else {
       printf("+++ %s\n", curr->getStmtClassName());
     }
-    if (auto ds = dyn_cast<DeclStmt>(curr)) {
-      if (const VarDecl *vd = dyn_cast<VarDecl>(ds->getSingleDecl())) {
-	used.insert(vd);
+    if (auto dstmt = dyn_cast<DeclStmt>(curr)) {
+      for (auto decl: dstmt->decls()) {
+	if (const VarDecl *vd = dyn_cast<VarDecl>(decl)) {
+	  used.insert(vd);
+	}
       }
     }
     for (auto child : curr->children()) {
@@ -86,7 +88,7 @@ public:
 	printf("used_var : %s\n", vd->getNameAsString().c_str());
       }
       //lv->dumpBlockLiveness(astContext->getSourceManager());
-#if 0
+#if 1
       for (auto B: cfg) {
 	if (B->getTerminator().isValid()) {
 	  CFGTerminator T = B->getTerminator();
