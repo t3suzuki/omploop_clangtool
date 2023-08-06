@@ -40,7 +40,7 @@ private:
     if (!curr) {
       return;
     } else {
-      printf("+++ %s\n", curr->getStmtClassName());
+      //printf("+++ %s\n", curr->getStmtClassName());
     }
     if (auto dstmt = dyn_cast<DeclStmt>(curr)) {
       for (auto decl: dstmt->decls()) {
@@ -62,6 +62,23 @@ private:
     }
     for (auto child : curr->children()) {
       get_used_vars(child, used);
+    }
+  }
+
+
+  void replace_goto(const Stmt *curr, const std::string str_yield)
+  {
+    if (!curr) {
+      return;
+    } else {
+      //printf("+++ %s\n", curr->getStmtClassName());
+    }
+    if (auto gstmt = dyn_cast<GotoStmt>(curr)) {
+      curr->dump();
+      rewriter->ReplaceText(gstmt->getSourceRange(), str_yield);
+    }
+    for (auto child : curr->children()) {
+      replace_goto(child, str_yield);
     }
   }
   
@@ -96,7 +113,7 @@ public:
       //cfg.print(llvm::outs(), astContext->getLangOpts(), false);
       for (auto vd: used) {
 	//std::cerr << "used_var : " << name << "\n";
-	printf("used_var : %s\n", vd->getNameAsString().c_str());
+	//printf("used_var : %s\n", vd->getNameAsString().c_str());
       }
       //lv->dumpBlockLiveness(astContext->getSourceManager());
 
@@ -117,8 +134,10 @@ public:
 		for (auto vd: used) {
 		  bool islive = lv->isLive(B, vd);
 		  QualType qtype = vd->getTypeSourceInfo()->getType();
+		  /*
 		  printf("live used_var : %s %d %s\n", vd->getNameAsString().c_str(), islive,
 			 qtype.getAsString().c_str());
+		  */
 		  if (islive) {
 		    new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CTX];\n";
 		    str_push += "__" + vd->getNameAsString() + "[i_ctx] = " + vd->getNameAsString() + ";\n";
@@ -131,7 +150,9 @@ public:
 	}
       }
 #endif
-      omp->dumpPretty(*astContext);
+      std::string str_yield = str_push + "stat[i_ctx] = __LINE__; goto __exit; case __LINE__: \n" + str_pop;
+      //replace_goto(omp->getInnermostCapturedStmt()->getCapturedDecl()->getBody(), str_yield);
+      //omp->dumpPretty(*astContext);
       //omp->dump();
       //omp->getLastIteration()->dump();
       
@@ -170,6 +191,8 @@ public:
       std::string str_body;
       llvm::raw_string_ostream os_body(str_body);
       omp->getBody()->printPretty(os_body, nullptr, PrintingPolicy(astContext->getLangOpts()));
+      std::regex re("goto my_yield.*;");
+      str_body = std::regex_replace(str_body, re, str_yield);
 
       os_head << "\n"
 	      << new_array <<
@@ -194,9 +217,7 @@ public:
 	"            } // if\n"
 	"            " << str_update << ";\n"
 	"            my_th_iter++;\n"
-	      << str_push <<
-	"            stat[i_ctx] = __LINE__; goto __exit; case __LINE__: \n"
-	      << str_pop << str_body <<
+	      << str_body <<
 	"          } // while (1)\n"
 	"      } // switch (stat[i_ctx])\n"
 	"    __exit:\n"
