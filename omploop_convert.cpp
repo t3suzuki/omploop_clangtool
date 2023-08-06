@@ -99,6 +99,9 @@ public:
 	printf("used_var : %s\n", vd->getNameAsString().c_str());
       }
       //lv->dumpBlockLiveness(astContext->getSourceManager());
+
+      std::string str_push = "";
+      std::string str_pop = "";
 #if 1
       std::string new_array;
       for (auto B: cfg) {
@@ -118,6 +121,8 @@ public:
 			 qtype.getAsString().c_str());
 		  if (islive) {
 		    new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CTX];\n";
+		    str_push += "__" + vd->getNameAsString() + "[i_ctx] = " + vd->getNameAsString() + ";\n";
+		    str_pop += vd->getNameAsString() + " = __" + vd->getNameAsString() + "[i_ctx];\n";
 		  }
 		}
 	      }
@@ -189,8 +194,9 @@ public:
 	"            } // if\n"
 	"            " << str_update << ";\n"
 	"            my_th_iter++;\n"
+	      << str_push <<
 	"            stat[i_ctx] = __LINE__; goto __exit; case __LINE__: \n"
-	      << str_body <<
+	      << str_pop << str_body <<
 	"          } // while (1)\n"
 	"      } // switch (stat[i_ctx])\n"
 	"    __exit:\n"
