@@ -49,6 +49,17 @@ private:
 	}
       }
     }
+    if (auto fstmt = dyn_cast<ForStmt>(curr)) {
+      auto inc = fstmt->getInc();
+      for (auto inc_op : inc->children()) {
+	if (auto dr_exp = dyn_cast<DeclRefExpr>(inc_op)) {
+	  auto decl = dr_exp->getDecl();
+	  if (const VarDecl *vd = dyn_cast<VarDecl>(decl)) {
+	    used.insert(vd);
+	  }
+	}
+      }
+    }
     for (auto child : curr->children()) {
       get_used_vars(child, used);
     }
@@ -106,7 +117,7 @@ public:
 		  printf("live used_var : %s %d %s\n", vd->getNameAsString().c_str(), islive,
 			 qtype.getAsString().c_str());
 		  if (islive) {
-		    new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CORO];\n";
+		    new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CTX];\n";
 		  }
 		}
 	      }
@@ -157,35 +168,34 @@ public:
 
       os_head << "\n"
 	      << new_array <<
-	"  auto " << str_init << "; // init \n"
 	"  int my_th_iter = 0;\n"
 	"  int my_th_iter_max = ";
       omp->getLastIteration()->printPretty(os_head, nullptr, PrintingPolicy(astContext->getLangOpts()));
 
       os_head << ";\n"
 	"  int n_done = 0;\n"
-	"  int stat[N_CORO];\n"
-	"  bzero(stat, N_CORO*sizeof(int));\n"
+	"  int stat[N_CTX];\n"
+	"  bzero(stat, N_CTX*sizeof(int));\n"
 	"  do {\n"
-	"    for (int i_coro=0; i_coro<N_CORO; i_coro++) {\n"
-	"      switch (stat[i_coro]) {\n"
+	"    for (int i_ctx=0; i_ctx<N_CTX; i_ctx++) {\n"
+	"      switch (stat[i_ctx]) {\n"
 	"        case -1: goto __exit;\n"
 	"        case 0:\n"
 	"          while (1) {\n"
 	"            if (!(" << str_cond << ")) {\n"
-	"              stat[i_coro] = -1;\n"
+	"              stat[i_ctx] = -1;\n"
 	"              n_done ++;\n"
 	"              goto __exit;\n"
 	"            } // if\n"
 	"            " << str_update << ";\n"
 	"            my_th_iter++;\n"
-	"            stat[i_coro] = __LINE__; goto __exit; case __LINE__: \n"
+	"            stat[i_ctx] = __LINE__; goto __exit; case __LINE__: \n"
 	      << str_body <<
 	"          } // while (1)\n"
-	"      } // switch (stat[i_coro])\n"
+	"      } // switch (stat[i_ctx])\n"
 	"    __exit:\n"
-	"    } // for i_coro\n"
-	"  } while (n_done < N_CORO);\n";
+	"    } // for i_ctx\n"
+	"  } while (n_done < N_CTX);\n";
       rewriter->RemoveText(omp->getSourceRange());
       rewriter->ReplaceText(omp->getInnermostCapturedStmt()->getSourceRange(), str_head);
       return true;
