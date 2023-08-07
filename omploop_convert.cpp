@@ -35,6 +35,30 @@ class MyVisitor : public RecursiveASTVisitor<MyVisitor> {
 private:
   ASTContext *astContext; // used for getting additional AST info
   Rewriter *rewriter;
+  const Stmt *for_init;
+  const VarDecl *vd_at_init;
+  const VarDecl *vd_iter;
+  bool is_target(const Stmt *curr)
+  {
+    if (!curr) {
+      return false;
+    } else {
+      //printf("+++ %s\n", curr->getStmtClassName());
+    }
+    if (auto gstmt = dyn_cast<GotoStmt>(curr)) {
+      LabelDecl *ldecl = gstmt->getLabel();
+      std::regex re("my_yield");
+      bool is_my_yield = std::regex_search(ldecl->getName().str(),re);
+      if (is_my_yield) {
+	return true;
+      }
+    }    
+    for (auto child : curr->children()) {
+      if (is_target(child))
+	return true;
+    }
+    return false;
+  }
   void get_used_vars(const Stmt *curr, std::set<const VarDecl *> &used)
   {
     if (!curr) {
@@ -50,12 +74,20 @@ private:
       }
     }
     if (auto fstmt = dyn_cast<ForStmt>(curr)) {
-      auto inc = fstmt->getInc();
-      for (auto inc_op : inc->children()) {
-	if (auto dr_exp = dyn_cast<DeclRefExpr>(inc_op)) {
-	  auto decl = dr_exp->getDecl();
+      for_init = fstmt->getInit();
+      if (const DeclStmt *dstmt = dyn_cast<DeclStmt>(for_init)) {
+	auto decl = dstmt->getSingleDecl();
+	if (const VarDecl *vd = dyn_cast<VarDecl>(decl)) {
+	  vd_at_init = vd;
+	}
+      }
+      auto for_inc = fstmt->getInc();
+      for (auto inc_op : for_inc->children()) {
+	if (auto dr_expr = dyn_cast<DeclRefExpr>(inc_op)) {
+	  auto decl = dr_expr->getDecl();
 	  if (const VarDecl *vd = dyn_cast<VarDecl>(decl)) {
 	    used.insert(vd);
+	    vd_iter = vd;
 	  }
 	}
       }
@@ -65,28 +97,12 @@ private:
     }
   }
 
-
-  void replace_goto(const Stmt *curr, const std::string str_yield)
-  {
-    if (!curr) {
-      return;
-    } else {
-      //printf("+++ %s\n", curr->getStmtClassName());
-    }
-    if (auto gstmt = dyn_cast<GotoStmt>(curr)) {
-      curr->dump();
-      rewriter->ReplaceText(gstmt->getSourceRange(), str_yield);
-    }
-    for (auto child : curr->children()) {
-      replace_goto(child, str_yield);
-    }
-  }
-  
 public:
   explicit MyVisitor(CompilerInstance *CI, Rewriter *R) 
       : astContext(&(CI->getASTContext())) // initialize private members
     {
       rewriter = R;
+      vd_at_init = nullptr;
     }
     virtual bool VisitStmt(Stmt *st) {
       //st->dump();
@@ -95,6 +111,10 @@ public:
 
   
     virtual bool VisitOMPLoopDirective(OMPLoopDirective *omp) {
+      if (!is_target(omp->getBody())) {
+	return true;
+      }
+      
       for (const Expr *u: omp->updates()) {
 	if (!u) {
 	  printf("Skipped this directive. I don't know why some OMPLoopDirectives don't work.\n");
@@ -119,6 +139,7 @@ public:
 
       std::string str_push = "";
       std::string str_pop = "";
+      std::set<const VarDecl *> lives;
 #if 1
       std::string new_array;
       for (auto B: cfg) {
@@ -139,9 +160,18 @@ public:
 			 qtype.getAsString().c_str());
 		  */
 		  if (islive) {
-		    new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CTX];\n";
+		    //new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CTX];\n";
+		    if (vd != vd_iter) {
+		      new_array += qtype.getAsString() + " " + vd->getNameAsString() + ";\n";
+		    }
+		    if (qtype.getAsString() == "auto") {
+		      new_array += "decltype(" + vd->getNameAsString() + ") __" + vd->getNameAsString() + "[N_CTX];\n";
+		    } else {
+		      new_array += qtype.getAsString() + " __" + vd->getNameAsString() + "[N_CTX];\n";
+		    }
 		    str_push += "__" + vd->getNameAsString() + "[i_ctx] = " + vd->getNameAsString() + ";\n";
 		    str_pop += vd->getNameAsString() + " = __" + vd->getNameAsString() + "[i_ctx];\n";
+		    lives.insert(vd);
 		  }
 		}
 	      }
@@ -150,21 +180,11 @@ public:
 	}
       }
 #endif
-      std::string str_yield = str_push + "stat[i_ctx] = __LINE__; goto __exit; case __LINE__: \n" + str_pop;
-      //replace_goto(omp->getInnermostCapturedStmt()->getCapturedDecl()->getBody(), str_yield);
-      //omp->dumpPretty(*astContext);
-      //omp->dump();
-      //omp->getLastIteration()->dump();
-      
-      //omp->getIterationVariable()->dump();
-      //omp->getIterationVariable()->dump();
-      
+      std::string str_yield = str_push + "stat[i_ctx] = 1; goto __exit; } case 1: {\n" + str_pop;
+
       std::string str_init;
       llvm::raw_string_ostream os_init(str_init);
-      for (const Expr *ini: omp->inits()) {
-	//ini->dump();
-	ini->printPretty(os_init, nullptr, PrintingPolicy(astContext->getLangOpts()));
-      }
+      for_init->printPretty(os_init, nullptr, PrintingPolicy(astContext->getLangOpts()));
 
       std::string str_cond;
       llvm::raw_string_ostream os_cond(str_cond);
@@ -193,8 +213,15 @@ public:
       omp->getBody()->printPretty(os_body, nullptr, PrintingPolicy(astContext->getLangOpts()));
       std::regex re("goto my_yield.*;");
       str_body = std::regex_replace(str_body, re, str_yield);
+      for (auto vd: lives) {
+	QualType qtype = vd->getTypeSourceInfo()->getType();
+	std::regex re2(qtype.getAsString() + " " + vd->getNameAsString());
+	str_body = std::regex_replace(str_body, re2, vd->getNameAsString());
+      }
 
       os_head << "\n"
+	"{\n"
+	      << str_init << ";\n"
 	      << new_array <<
 	"  int my_th_iter = 0;\n"
 	"  int my_th_iter_max = ";
@@ -221,8 +248,10 @@ public:
 	"          } // while (1)\n"
 	"      } // switch (stat[i_ctx])\n"
 	"    __exit:\n"
+	"      ;\n"
 	"    } // for i_ctx\n"
-	"  } while (n_done < N_CTX);\n";
+	"  } while (n_done < N_CTX);\n"
+	"}\n";
       rewriter->RemoveText(omp->getSourceRange());
       rewriter->ReplaceText(omp->getInnermostCapturedStmt()->getSourceRange(), str_head);
       return true;
